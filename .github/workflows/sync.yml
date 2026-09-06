@@ -1,0 +1,21 @@
+name: Sync Fork
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Automatically runs every day at midnight
+  workflow_dispatch: # Allows you to manually trigger the sync via the GitHub Actions UI
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+
+      - name: Sync Upstream
+        uses: tgymnich/fork-sync-action@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          upstream_repository: iptv-org/iptv
+          upstream_branch: master
+          target_branch: master
