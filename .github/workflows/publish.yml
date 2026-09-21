@@ -1,0 +1,81 @@
+name: Publish playlists
+
+# This fork's replacement for upstream's `update` workflow.
+#
+# It deliberately does NOT run `playlist:update` and does NOT commit anything,
+# to master or to a gh-pages branch. Two reasons:
+#
+#   1. `loadIssues()` in scripts/utils.ts is hardcoded to owner 'iptv-org',
+#      repo 'iptv' (see scripts/constants.ts), so running it here would apply
+#      upstream's issues to this fork's streams -- work upstream's own bot has
+#      already done and that Sync Fork brings us for free.
+#   2. Committing to streams/ and PLAYLISTS.md would collide with the very
+#      same files arriving via sync, producing merge conflicts across several
+#      hundred .m3u files on a regular basis.
+#
+# So: sync pulls the source of truth, this builds and publishes it. master
+# stays a clean mirror of upstream and the repo gains no extra branches.
+#
+# One-time setup: Settings -> Pages -> Source: GitHub Actions.
+# There is no gh-pages branch to create first -- the built site is uploaded as
+# an artifact and deployed straight to Pages.
+
+on:
+  workflow_run:
+    workflows: ['Sync Fork']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deployments race; let an in-flight one finish rather than
+# cancelling it, since a cancelled deploy can leave Pages mid-update.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: master
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      # postinstall runs `api:load`, which downloads the iptv-org API data that
+      # playlist:generate and playlist:export both need.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate public playlists
+        run: npm run playlist:generate
+
+      - name: Create .api/streams.json
+        run: npm run playlist:export
+
+      - name: Stage streams.json under /api
+        run: |
+          set -euo pipefail
+          mkdir -p .gh-pages/api
+          cp .api/streams.json .gh-pages/api/streams.json
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: .gh-pages
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
