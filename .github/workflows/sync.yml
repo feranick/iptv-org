@@ -1,21 +1,55 @@
 name: Sync Fork
 
+# Fast-forwards this fork's master onto iptv-org/iptv:master using GitHub's
+# merge-upstream API. No third-party action, no local checkout, no git push.
+#
+# Requires a repository secret named SYNC_TOKEN: a classic PAT with the `repo`
+# and `workflow` scopes. The `workflow` scope is the important one -- upstream
+# edits files under .github/workflows/ from time to time, and the built-in
+# GITHUB_TOKEN is rejected with a 422 on any commit that touches them.
+# The fallback below lets this run before you create the PAT; it will simply
+# fail on those particular syncs until you do.
+
 on:
   schedule:
-    - cron: '0 0 * * *' # Automatically runs every day at midnight
-  workflow_dispatch: # Allows you to manually trigger the sync via the GitHub Actions UI
+    # 01:30 UTC, well after upstream's own `update` workflow runs at 00:00 UTC.
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-fork
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout target repo
-        uses: actions/checkout@v4
+      - name: Merge upstream into master
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          HAS_PAT: ${{ secrets.SYNC_TOKEN != '' }}
+        run: |
+          set -euo pipefail
 
-      - name: Sync Upstream
-        uses: tgymnich/fork-sync-action@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          upstream_repository: iptv-org/iptv
-          upstream_branch: master
-          target_branch: master
+          if [ "$HAS_PAT" != "true" ]; then
+            echo "::warning::SYNC_TOKEN is not set; falling back to GITHUB_TOKEN. \
+          Syncs that include changes to .github/workflows/ will fail with a 422."
+          fi
+
+          response=$(gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${{ github.repository }}/merge-upstream" \
+            -f branch=master)
+
+          echo "$response"
+          merge_type=$(echo "$response" | jq -r '.merge_type // "none"')
+          message=$(echo "$response" | jq -r '.message // ""')
+
+          echo "### Sync result" >> "$GITHUB_STEP_SUMMARY"
+          echo "- merge type: \`${merge_type}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- message: ${message}" >> "$GITHUB_STEP_SUMMARY"
